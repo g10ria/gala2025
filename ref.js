@@ -111,17 +111,18 @@ function draw() {
                         dx *= rescale;
                         dy *= rescale;
                     }
+
+                    if (dx || dy) {
+                        let motion_magnitude = Math.sqrt(dx * dx + dy * dy)
+                        console.log(motion_magnitude)
+                        console.log(dx,dy)
+                    }
                 }
                 line(x + dx, y + dy, x - arrowWidth * dy, y + arrowWidth * dx);
                 line(x + dx, y + dy, x + arrowWidth * dy, y - arrowWidth * dx);
             }
         }
     }
-
-    // if (select('#showRaw').checked()) {
-        // capture.updatePixels();
-        // image(capture, 0, 0, 640, 480);
-    // }
 }
 
 // // https://kylemcdonald.github.io/cv-examples/

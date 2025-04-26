@@ -3,6 +3,7 @@
 var capture;
 var w = 640;
 var h = 480;
+var motionHistoryImage;
 var previousPixels;
 var frame_rate = 15 // per second
 var seconds_per_wind_rev = 3 // change this according to the bpm
@@ -16,6 +17,12 @@ var wind_magnitude = 50
 const canvas = document.getElementById('splat-canvas');
 const p5_canvas = document.getElementById('p5-canvas');
 resizeCanvas();
+
+var backgroundPixels;
+
+function resetBackground() {
+    backgroundPixels = undefined;
+}
 
 function setup() {
     frameRate(frame_rate)
@@ -36,53 +43,150 @@ function setup() {
 }
 
 function draw() {
-    wind_direction += (2 * Math.PI) / seconds_per_wind_rev / frame_rate
-
+    image(capture, 0, 0);
     capture.loadPixels();
-    modulo_variable = int(modulo_constant + Math.random() * modulo_constant) % modulo_constant
+    let num_splats = 0
 
-    let total_splats = 0
     if (capture.pixels.length > 0) { // don't forget this!
-        if (!previousPixels) {
-            previousPixels = copyImage(capture.pixels, previousPixels);
-        } else {
-            var w = capture.width,
-                h = capture.height;
-            var i = 0;
-            var pixels = capture.pixels;
-            var thresholdAmount = 20
-            thresholdAmount *= 3; // 3 for r, g, b
-            for (var y = 0; y < h; y++) {
-                for (var x = 0; x < w; x++) {
-                    // calculate the differences
-                    var rdiff = Math.abs(pixels[i + 0] - previousPixels[i + 0]);
-                    var gdiff = Math.abs(pixels[i + 1] - previousPixels[i + 1]);
-                    var bdiff = Math.abs(pixels[i + 2] - previousPixels[i + 2]);
-                    // copy the current pixels to previousPixels
-                    previousPixels[i + 0] = pixels[i + 0];
-                    previousPixels[i + 1] = pixels[i + 1];
-                    previousPixels[i + 2] = pixels[i + 2];
-                    var diffs = rdiff + gdiff + bdiff;
-                    
-                    if (diffs > thresholdAmount) {
+        if (!backgroundPixels) {
+            // copy the camera pixels for storing the background
+            backgroundPixels = copyImage(capture.pixels, backgroundPixels);
+            // make a grayscale image for storing the motion history
+            motionHistoryImage = new Uint8ClampedArray(w * h);
+        }
+        var pixels = capture.pixels;
+        var thresholdAmount = 0.2
+        var sumSquaredThreshold = thresholdAmount * (255 * 255) * 3;
+        var iRgb = 0,
+            iGray = 0;
+        for (var y = 0; y < h; y++) {
+            for (var x = 0; x < w; x++) {
+                var rdiff = pixels[iRgb + 0] - backgroundPixels[iRgb + 0];
+                var gdiff = pixels[iRgb + 1] - backgroundPixels[iRgb + 1];
+                var bdiff = pixels[iRgb + 2] - backgroundPixels[iRgb + 2];
+                var sumSquaredDiff = rdiff * rdiff + gdiff * gdiff + bdiff * bdiff;
+                // if this is a foreground pixel
+                if (sumSquaredDiff > sumSquaredThreshold) {
+                    // set the motion history image to white
+                    motionHistoryImage[iGray] = 255;
+                } else {
+                    // otherwise make it fade towards black
+                    motionHistoryImage[iGray]--;
+                }
+                var output = motionHistoryImage[iGray];
+                pixels[iRgb++] = output;
+                pixels[iRgb++] = output;
+                pixels[iRgb++] = output;
+                iRgb++; // skip alpha in rgbindex
+                iGray++; // next grayscale index
+            }
+        }
 
-                        if (x % modulo_variable == 0 && y % modulo_variable == 0 && total_splats < 20) {
-                            total_splats ++
+        // some parameters for calculating the motion vectors
+        var stepSize = 16;
+        var radius = 8;
+        var maximumDiff = 8; // ignore big "motion edges"
+        var minimumValue = 245; // ignore very old values
+        var arrowWidth = .25;
+        stroke(255);
+        noFill();
+
+        // pre-calculate some values outside the loop
+        var upOffset = -radius * w;
+        var downOffset = +radius * w;
+        var leftOffset = -radius;
+        var rightOffset = +radius;
+        var maximumLength = Math.sqrt(maximumDiff * maximumDiff * 2);
+        for (var y = radius; y + radius < h; y += stepSize) {
+            for (var x = radius; x + radius < w; x += stepSize) {
+                var i = y * w + x;
+                var center = motionHistoryImage[i];
+                var dx = 0,
+                    dy = 0;
+                if (center > minimumValue) {
+                    var up = motionHistoryImage[i + upOffset];
+                    var down = motionHistoryImage[i + downOffset];
+                    var left = motionHistoryImage[i + leftOffset];
+                    var right = motionHistoryImage[i + rightOffset];
+                    dx = right - left;
+                    dy = down - up;
+                    // ignore big "motion edges"
+                    if (dx > maximumDiff || dy > maximumDiff ||
+                        -dx > maximumDiff || -dy > maximumDiff) {
+                        dx = 0, dy = 0;
+                    } else {
+                        // big changes are slow motion, small changes are fast motion
+                        var length = Math.sqrt(dx * dx + dy * dy);
+                        var rescale = (maximumLength - length) / length;
+                        dx *= rescale;
+                        dy *= rescale;
+                    }
+
+                    if (dx || dy) {
+                        let motion_magnitude = Math.sqrt(dx * dx + dy * dy)
+                        // console.log(motion_magnitude)
+                        if (motion_magnitude > 8 && num_splats < 5) {
+                            num_splats++
+                            console.log("splatting", dx, dy)
                             let scaledX = (w-x) / w 
                             let scaledY = (h-y) / h
-
-                            let dx = wind_magnitude * (Math.random() + 0.5) * Math.sin(wind_direction)
-                            let dy = wind_magnitude * (Math.random() + 0.5) * Math.cos(wind_direction)
-                            splat(scaledX, scaledY, dx, dy, generateColor())
-                            // splat in the direction of movement!
+                            splat(scaledX, scaledY, dx * 30, dy * 30, generateColor())
                         }
                     }
-                    i += 4
                 }
             }
         }
     }
 }
+
+// function draw() {
+//     wind_direction += (2 * Math.PI) / seconds_per_wind_rev / frame_rate
+
+//     capture.loadPixels();
+//     modulo_variable = int(modulo_constant + Math.random() * modulo_constant) % modulo_constant
+
+//     let total_splats = 0
+//     if (capture.pixels.length > 0) { // don't forget this!
+//         if (!previousPixels) {
+//             previousPixels = copyImage(capture.pixels, previousPixels);
+//         } else {
+//             var w = capture.width,
+//                 h = capture.height;
+//             var i = 0;
+//             var pixels = capture.pixels;
+//             var thresholdAmount = 20
+//             thresholdAmount *= 3; // 3 for r, g, b
+//             for (var y = 0; y < h; y++) {
+//                 for (var x = 0; x < w; x++) {
+//                     // calculate the differences
+//                     var rdiff = Math.abs(pixels[i + 0] - previousPixels[i + 0]);
+//                     var gdiff = Math.abs(pixels[i + 1] - previousPixels[i + 1]);
+//                     var bdiff = Math.abs(pixels[i + 2] - previousPixels[i + 2]);
+//                     // copy the current pixels to previousPixels
+//                     previousPixels[i + 0] = pixels[i + 0];
+//                     previousPixels[i + 1] = pixels[i + 1];
+//                     previousPixels[i + 2] = pixels[i + 2];
+//                     var diffs = rdiff + gdiff + bdiff;
+                    
+//                     if (diffs > thresholdAmount) {
+
+//                         if (x % modulo_variable == 0 && y % modulo_variable == 0 && total_splats < 20) {
+//                             total_splats ++
+//                             let scaledX = (w-x) / w 
+//                             let scaledY = (h-y) / h
+
+//                             let dx = wind_magnitude * (Math.random() + 0.5) * Math.sin(wind_direction)
+//                             let dy = wind_magnitude * (Math.random() + 0.5) * Math.cos(wind_direction)
+//                             splat(scaledX, scaledY, dx, dy, generateColor())
+//                             // splat in the direction of movement!
+//                         }
+//                     }
+//                     i += 4
+//                 }
+//             }
+//         }
+//     }
+// }
 
 let config = {
     SIM_RESOLUTION: 128,
